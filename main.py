@@ -2,77 +2,55 @@ import shodan
 import dns.message
 import dns.query
 import dns.flags
-import getpass
-import socket
+import dns.exception
 
-# --- FUNCIONES DE ESCANEO AVANZADO ---
+def get_api_key():
+    return input("🔑 Ingresa tu API Key de Shodan: ").strip()
 
-def verificar_recursividad(ip):
+def search_dns_servers(api_key, query="port:53 country:CO"):
+    api = shodan.Shodan(api_key)
     try:
-        query = dns.message.make_query('www.google.com', dns.rdatatype.A)
-        query.flags |= dns.flags.RD
-        response = dns.query.udp(query, ip, timeout=2)
-        return bool(response.flags & dns.flags.RA)
-    except Exception:
-        return False
-
-def verificar_amplificacion(ip):
-    try:
-        query = dns.message.make_query('google.com', dns.rdatatype.ANY)
-        response = dns.query.udp(query, ip, timeout=2)
-        size = len(response.to_wire())
-        return size > 512
-    except Exception:
-        return False
-
-def escanear_ip(ip):
-    print(f"\n[+] Escaneando IP: {ip}")
-    recursivo = verificar_recursividad(ip)
-    amplifica = verificar_amplificacion(ip)
-    print(" - Recursividad DNS:", "✅" if recursivo else "❌")
-    print(" - Vulnerabilidad a amplificación:", "⚠️ Sí" if amplifica else "✅ No")
-
-# --- BÚSQUEDA SHODAN BÁSICA ---
-
-def buscar_dns_publicos(api, query="port:53"):
-    print("\n[🔍] Buscando servidores DNS públicos en Shodan...")
-    try:
-        resultados = api.search(query, limit=10)  # puedes cambiar el límite
-        ips = [match['ip_str'] for match in resultados['matches']]
-        print(f"Encontradas {len(ips)} IPs con puerto 53 abierto:")
-        for i, ip in enumerate(ips, 1):
-            print(f" {i}. {ip}")
-        return ips
-    except Exception as e:
-        print("❌ Error buscando en Shodan:", e)
+        print(f"\n🔎 Buscando servidores DNS con: '{query}' ...\n")
+        results = api.search(query)
+        servers = [match['ip_str'] for match in results['matches']]
+        print(f"🌐 Se encontraron {len(servers)} servidores.\n")
+        return servers
+    except shodan.APIError as e:
+        print(f"❌ Error en la API de Shodan: {e}")
         return []
 
-# --- FLUJO PRINCIPAL ---
+def check_recursion(ip):
+    try:
+        query = dns.message.make_query('google.com', dns.rdatatype.A)
+        response = dns.query.udp(query, ip, timeout=3)
+        if response.flags & dns.flags.RA:
+            return True
+    except dns.exception.DNSException:
+        pass
+    return False
+
+def check_amplification(ip):
+    try:
+        query = dns.message.make_query('google.com', dns.rdatatype.ANY)
+        response = dns.query.udp(query, ip, timeout=3)
+        if len(response.to_wire()) > 512:
+            return True
+    except dns.exception.DNSException:
+        pass
+    return False
 
 def main():
-    print("=== Auditoría DNS Básica y Avanzada con Shodan ===")
-    api_key = getpass.getpass("🔐 Ingresa tu API Key de Shodan: ")
-    api = shodan.Shodan(api_key)
+    api_key = get_api_key()
+    servers = search_dns_servers(api_key)
 
-    ips_shodan = buscar_dns_publicos(api)
+    for ip in servers:
+        print(f"📡 Analizando servidor: {ip}")
+        is_recursive = check_recursion(ip)
+        is_amplifiable = check_amplification(ip)
 
-    # Selección y escaneo
-    if ips_shodan:
-        opcion = input("\n¿Deseas escanear las IPs encontradas? (s/n): ").lower()
-        if opcion == "s":
-            for ip in ips_shodan:
-                escanear_ip(ip)
-        else:
-            custom = input("Ingresa otras IPs separadas por coma para escanear: ").split(",")
-            for ip in map(str.strip, custom):
-                if ip:
-                    escanear_ip(ip)
-    else:
-        print("No se encontraron IPs desde Shodan. Puedes ingresar manualmente.")
-        custom = input("Ingresa IPs separadas por coma: ").split(",")
-        for ip in map(str.strip, custom):
-            if ip:
-                escanear_ip(ip)
+        print(f"    🔁 Recursividad: {'✅' if is_recursive else '❌'}")
+        print(f"    📈 Amplificación: {'⚠️' if is_amplifiable else '❌'}")
+        print("-" * 40)
 
 if __name__ == "__main__":
     main()
